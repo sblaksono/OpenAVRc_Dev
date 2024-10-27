@@ -34,7 +34,8 @@
 
 #include "../../OpenAVRc.h"
 
-//#define BIDIRBUSY  // Bi-directional busy pin for control of audio amplifier and possible contention of voice and audio beeps.
+#define BIDIRBUSY  // Bi-directional busy pin for control of audio amplifier and possible contention of voice and audio beeps.
+// Always used regardless of the signal being routed to the power amplifier.
 
 #define VOX_QUEUE_LEN  22  // was 32 words
 
@@ -77,13 +78,18 @@ void JQ6500Check() // Called every 10 ms.
 
   case CHECK_PLAYLIST:
     if (JQ6500_PlayIndex == JQ6500_InputIndex) break;
+
     vox_state = MAKE_VOLUME_PKT; // Something to play.
-    // drop through // break;
+
+#if defined (VOICE_JQ6500)
+    vox_state = GET_VOX_PA; // JQ6500 Volume packet seems to cause a mute state if sent before play command.
+    break;
+#endif
+    // drop through
 
   case MAKE_VOLUME_PKT:
-    if(vox_rbuf_in != vox_rbuf_out) break; // Some processing of another packet in progress.
+    if(VOICE_USART.CTRLA & USART_DREINTLVL_gm) break; // Some processing of another packet is in progress.
     make_volume_pkt();
-    vox_rbuf_out = 0;
     vox_state = SEND_VOLUME_PKT;
     // drop through // break;
 
@@ -107,9 +113,8 @@ void JQ6500Check() // Called every 10 ms.
     break;
 
   case MAKE_PLAY_PKT:
-    if(vox_rbuf_in != vox_rbuf_out) break; // Some processing of another packet in progress.
+    if(VOICE_USART.CTRLA & USART_DREINTLVL_gm) break; // Some processing of another packet is in progress.
     make_play_pkt();
-    vox_rbuf_out = 0;
     if (++JQ6500_PlayIndex == VOX_QUEUE_LEN) JQ6500_PlayIndex = 0;
     vox_state = SEND_PLAY_PKT;
     break;
@@ -124,6 +129,8 @@ void JQ6500Check() // Called every 10 ms.
 #define  BUSYDELAY  15
 #elif defined (VOICE_JQ8400)
 #define  BUSYDELAY  80
+#elif defined (VOICE_JQ6500)
+#define  BUSYDELAY  15
 #endif
 
   case WAIT_BUSY_DELAY:
@@ -177,20 +184,22 @@ void InitVoiceUartTx()
 ISR(VOICE_DRE_VECT)
 {
 #if !defined(SIMU)
-
-  if(vox_rbuf_in == vox_rbuf_out)
+  if(vox_rbuf_in == 0)
   {
     VOICE_USART.DATA = vox_rbuf[vox_rbuf_out];
     VOICE_USART.CTRLA &= ~USART_DREINTLVL_gm;
+    vox_rbuf_in = 0;
+    vox_rbuf_out = 0;
   }
   else
   {
     VOICE_USART.DATA = vox_rbuf[vox_rbuf_out++];
+    vox_rbuf_in--;
   }
 #endif
 }
 
-#if defined (VOICE_BY8001)
+#if 0 //defined (VOICE_BY8001)
 // BY8001 module driver.
 /* The BY8001 packet format is as follows
  * Start code of 0x7E
@@ -261,7 +270,7 @@ void make_play_pkt(void)
 }
 #endif
 
-#if 0 // JQ6500
+#if defined (VOICE_JQ6500)
 // JQ6500 module driver.
 /* The JQ6500 packet format is as follows
  * Start code of 0x7E
